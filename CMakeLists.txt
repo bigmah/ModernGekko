@@ -225,7 +225,11 @@ if(MODERNGEKKO_ENABLE_DOLPHIN_RUNTIME)
     )
     if(NOT MSVC)
         # The guest's arithmetic is the guest's; the host may not reassociate it.
-        target_compile_options(moderngekko_dolvm PRIVATE -ffp-contract=off -fno-fast-math -mcpu=native)
+        # -fno-stack-protector: the dispatch loop's frame holds a 2 KB register
+        # file, so it gets a guard by default -- a load, a store and a compare
+        # on a function called once per thirty guest instructions.
+        target_compile_options(moderngekko_dolvm PRIVATE
+            -ffp-contract=off -fno-fast-math -mcpu=native -fno-stack-protector)
     endif()
     if(MODERNGEKKO_DOLVM_PROFILE)
         target_compile_definitions(moderngekko_dolvm PRIVATE DOLVM_PROFILE=1)
