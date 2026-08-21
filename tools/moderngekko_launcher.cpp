@@ -336,9 +336,16 @@ std::optional<fs::path> PrepareDisc(const fs::path& image, const fs::path& user_
     return std::nullopt;
   }
   return output;
-#else
+#elif defined(MODERNGEKKO_REQUIRED_DISC_ID)
   *error = "this disc is not the pinned patched release";
   return std::nullopt;
+#else
+  // An unbranded build pins no disc and ships no preparer, so there is nothing
+  // to compare against: any image Dolphin was able to open is usable as-is.
+  // Without this branch a generic build rejects every disc it is handed.
+  (void)source_id;
+  (void)error;
+  return image;
 #endif
 }
 
