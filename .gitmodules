@@ -1,5 +1,5 @@
 [submodule "vendor/dolphin"]
 	path = vendor/dolphin
-	url = https://github.com/ExpansionPak/RecompCore.git
-	branch = moderngekko-vendor
+	url = git@github.com:bigmah/RecompCore.git
+	branch = dolvm-vendor
 	shallow = true
