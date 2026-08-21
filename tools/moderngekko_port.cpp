@@ -39,11 +39,11 @@ struct BuildOptions
   // value is forwarded as RECOMPCORE_MODULE_OPT_LEVEL and folded into the
   // cache key, so an -O3 module cannot collide with an -O2 one.
   std::string opt_level;
-#if defined(MODERNGEKKO_DOLRECOMP_LLVM)
-  std::string backend = "llvm";
-#else
-  std::string backend = "c";
-#endif
+  // What a disc is recompiled to, by default bytecode: it takes seconds rather
+  // than minutes because nothing is compiled, which is what makes it the one to
+  // reach for while working on the interpreter. `c` and `llvm` are the native
+  // backends and are now opt-in.
+  std::string backend = "vm";
   fs::path output;
   std::vector<std::string> runner_arguments;
 };
@@ -744,7 +744,8 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
 void Usage()
 {
   std::cerr << "usage: moderngekko-port inspect <game-root>\n"
-               "       moderngekko-port build <game-root> [--backend c|llvm|vm] [--toolchain auto|clang|gcc|msvc] [--opt-level 0-3] [--output path]\n"
+               "       moderngekko-port build <game-root> [--backend vm|c|llvm] [--toolchain auto|clang|gcc|msvc] [--opt-level 0-3] [--output path]\n"
+               "       (--backend defaults to vm: bytecode, seconds to build; c and llvm are native code, minutes)\n"
                "       moderngekko-port run <game-root> [build options] [-- runner options]\n";
 }
 }  // namespace
