@@ -235,6 +235,7 @@ int dolvm_bridge_dispatch(struct CPUState* ctx, uint32_t address)
         static u64 budget;
         static u64 charged;
         static double started;
+        static double started_cpu;
         if (!budget) {
             const char* configured = getenv("DOLVM_BENCH_CYCLES");
             budget = configured ? strtoull(configured, NULL, 0) : 0;
@@ -243,6 +244,8 @@ int dolvm_bridge_dispatch(struct CPUState* ctx, uint32_t address)
             struct timespec now;
             clock_gettime(CLOCK_MONOTONIC, &now);
             started = (double)now.tv_sec + (double)now.tv_nsec / 1e9;
+            clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now);
+            started_cpu = (double)now.tv_sec + (double)now.tv_nsec / 1e9;
 #ifdef DOLVM_SAMPLE
             dolvm_sample_start();
 #endif
@@ -255,9 +258,19 @@ int dolvm_bridge_dispatch(struct CPUState* ctx, uint32_t address)
             clock_gettime(CLOCK_MONOTONIC, &now);
             double elapsed =
                 (double)now.tv_sec + (double)now.tv_nsec / 1e9 - started;
-            fprintf(stderr, "[dolvm-bench] %llu guest cycles in %.3fs = %.4fx\n",
+            clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now);
+            double cpu =
+                (double)now.tv_sec + (double)now.tv_nsec / 1e9 - started_cpu;
+            // Wall time is what a player feels, and cpu time is what survives a
+            // busy machine: a background daemon eating a core moves the first by
+            // tens of percent and the second by very little, which is the
+            // difference between a measurement and a mood.
+            fprintf(stderr,
+                    "[dolvm-bench] %llu guest cycles in %.3fs = %.4fx "
+                    "(cpu %.3fs = %.4fx)\n",
                     (unsigned long long)charged, elapsed,
-                    (double)charged / 486000000.0 / elapsed);
+                    (double)charged / 486000000.0 / elapsed, cpu,
+                    (double)charged / 486000000.0 / cpu);
             fflush(stderr);
 #ifdef DOLVM_PGO_GENERATE
             // An instrumented build writes its profile from an atexit hook,
