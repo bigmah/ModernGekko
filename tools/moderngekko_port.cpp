@@ -68,6 +68,18 @@ std::string Suffix()
 #endif
 }
 
+// A bytecode module is a data file, not a shared library, so it needs no
+// per-platform suffix and no compiler to produce.
+bool IsBytecodeBackend(const std::string& backend)
+{
+  return backend == "vm";
+}
+
+std::string ModuleSuffix(const std::string& backend)
+{
+  return IsBytecodeBackend(backend) ? std::string(".dvm") : Suffix();
+}
+
 std::string Quote(const fs::path& value)
 {
 #if defined(_WIN32)
@@ -468,8 +480,13 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
     return std::nullopt;
   }
 
+  const bool bytecode = IsBytecodeBackend(options.backend);
   std::string compiler;
-  if (options.toolchain == "auto")
+  if (bytecode)
+    // Nothing is compiled: DolRecomp writes the module and the chassis
+    // interprets it. Naming a toolchain here would only be misleading.
+    compiler = "none";
+  else if (options.toolchain == "auto")
 #if defined(_MSC_VER)
     compiler = "cl";
 #elif defined(__clang__)
@@ -498,7 +515,8 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
     return std::nullopt;
   }
 
-  const std::string compiler_identity = ReadCommand(compiler + " --version 2>&1");
+  const std::string compiler_identity =
+      bytecode ? std::string("none") : ReadCommand(compiler + " --version 2>&1");
   if (compiler_identity.empty())
   {
     std::cerr << "compiler is unavailable: " << compiler << '\n';
@@ -523,7 +541,9 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
   // per-translation-unit compiles.
   const std::string opt = options.opt_level.empty() ? std::string("2") : options.opt_level;
   std::string flags;
-  if (compiler == "clang")
+  if (bytecode)
+    flags = "none";
+  else if (compiler == "clang")
   {
     flags = "compile:-O" + opt +
             " -flto=thin -fvisibility=hidden -ffp-contract=off -fno-fast-math "
@@ -552,9 +572,11 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
   key_tail << std::hex << std::setfill('0') << std::setw(16) << Fnv1a(identity);
   const std::string cache_key = game.dol_sha256 + "-" + key_tail.str();
   const fs::path artifact = options.output / game.disc_id / cache_key;
-  const fs::path module = artifact / ("g" + game.disc_id + "_recomp" + Suffix());
+  const fs::path module =
+      artifact / ("g" + game.disc_id + "_recomp" + ModuleSuffix(options.backend));
   const fs::path module_build = artifact / "module-build";
-  const fs::path built = module_build / ("g" + game.disc_id + "_recomp" + Suffix());
+  const fs::path built =
+      module_build / ("g" + game.disc_id + "_recomp" + ModuleSuffix(options.backend));
   if (fs::is_regular_file(module))
   {
     fs::create_directories(options.output / game.disc_id);
@@ -605,6 +627,11 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
   std::string generate = Quote(dolrecomp) + " -j" +
                          std::to_string(std::max(1u, std::thread::hardware_concurrency())) +
                          " --backend=" + options.backend + " ";
+  // A bytecode module records the disc it was built from so the chassis can
+  // refuse one paired with the wrong game. A GameCube DOL carries no ID of its
+  // own, so it has to be supplied here.
+  if (bytecode)
+    generate += "--game-id " + game.disc_id + " ";
   if (game.platform == moderngekko::GamePlatform::GameCube)
     generate += "--cpu gekko --gamecube " + Quote(recomp_dol) + " " + Quote(generated_parent);
   else
@@ -612,6 +639,34 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
                 Quote(generated_parent);
   if (!RunCommand(generate))
     return std::nullopt;
+
+  if (bytecode)
+  {
+    // DolRecomp wrote one .dvm beside where the C backend would have written
+    // its sources. There is nothing to compile, so publishing is a copy.
+    std::vector<fs::path> candidates = {
+        generated_parent / "generated" / "generated.dvm",
+        generated_parent / (game.disc_id + "_generated") / (game.disc_id + ".dvm"),
+    };
+    fs::path emitted;
+    for (const fs::path& candidate : candidates)
+    {
+      if (fs::is_regular_file(candidate))
+      {
+        emitted = candidate;
+        break;
+      }
+    }
+    if (emitted.empty())
+    {
+      std::cerr << "DolRecomp did not produce a bytecode module under " << generated_parent
+                << '\n';
+      return std::nullopt;
+    }
+    fs::create_directories(module_build);
+    fs::copy_file(emitted, built, fs::copy_options::overwrite_existing);
+    return publish_module();
+  }
 
   fs::path generated = game.platform == moderngekko::GamePlatform::Wii ?
       generated_parent / (game.disc_id + "_generated") : generated_parent / "generated";
@@ -672,7 +727,7 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
 void Usage()
 {
   std::cerr << "usage: moderngekko-port inspect <game-root>\n"
-               "       moderngekko-port build <game-root> [--backend c|llvm] [--toolchain auto|clang|gcc|msvc] [--opt-level 0-3] [--output path]\n"
+               "       moderngekko-port build <game-root> [--backend c|llvm|vm] [--toolchain auto|clang|gcc|msvc] [--opt-level 0-3] [--output path]\n"
                "       moderngekko-port run <game-root> [build options] [-- runner options]\n";
 }
 }  // namespace
@@ -713,7 +768,7 @@ int main(int argc, char** argv)
   }
   if (options.output.empty())
     options.output = DefaultOutput();
-  if (options.backend != "c" && options.backend != "llvm")
+  if (options.backend != "c" && options.backend != "llvm" && options.backend != "vm")
   {
     std::cerr << "unknown backend: " << options.backend << '\n';
     return 2;

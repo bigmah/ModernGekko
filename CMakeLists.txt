@@ -18,6 +18,8 @@ option(MODERNGEKKO_ENABLE_DYNAMIC_MODULES
        "Load game modules through the host dynamic-library API"
        ${MODERNGEKKO_DYNAMIC_MODULES_DEFAULT})
 
+option(MODERNGEKKO_DOLVM_PROFILE
+    "Count executed DolVM opcodes and print the histogram when a bytecode module closes" OFF)
 option(MODERNGEKKO_ENABLE_DOLPHIN_RUNTIME
        "Build the RecompCore/Dolphin production chassis" ON)
 option(MODERNGEKKO_ENABLE_DOLPHIN_TESTS
@@ -181,6 +183,49 @@ add_library(moderngekko_legacy STATIC
 )
 add_library(ModernGekko::LegacyRuntime ALIAS moderngekko_legacy)
 
+# DolRecomp's interpreter half, compiled against the chassis's CPUState rather
+# than the recompiler's own runtime copy of it. That is what lets a .dvm -- a
+# recompilation lowered to bytecode instead of to machine code -- be dispatched
+# through the same module ABI a native module uses.
+#
+# The shim include directory has to come before DolRecomp's own src/: both trees
+# ship a "cpu/cpu.h" and a "common/types.h" under matching include guards, and
+# the chassis needs GXRuntime's of each.
+if(MODERNGEKKO_ENABLE_DOLPHIN_RUNTIME)
+    add_library(moderngekko_dolvm STATIC
+        src/runtime/dolvm/dolvm_bridge.c
+        vendor/dolphin/DolRecomp/src/vm/dolvm_module.c
+        vendor/dolphin/DolRecomp/src/vm/dolvm_interp.c
+        vendor/dolphin/GXRuntime/src/core/cpu.c
+        vendor/dolphin/GXRuntime/src/core/cpu_interpreter.c
+        vendor/dolphin/GXRuntime/src/core/cpu_interpreter_table.c
+        vendor/dolphin/GXRuntime/src/core/cpu_interpreter_float.c
+        vendor/dolphin/GXRuntime/src/core/cpu_interpreter_integer.c
+    )
+    target_include_directories(moderngekko_dolvm
+        PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/dolvm"
+        PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/dolvm/shim"
+            "${CMAKE_CURRENT_SOURCE_DIR}/vendor/dolphin/GXRuntime/include"
+            "${CMAKE_CURRENT_SOURCE_DIR}/vendor/dolphin/DolRecomp/src"
+    )
+    set_target_properties(moderngekko_dolvm PROPERTIES
+        C_STANDARD 11
+        C_STANDARD_REQUIRED ON
+        C_VISIBILITY_PRESET hidden
+    )
+    if(NOT MSVC)
+        # The guest's arithmetic is the guest's; the host may not reassociate it.
+        target_compile_options(moderngekko_dolvm PRIVATE -ffp-contract=off -fno-fast-math)
+    endif()
+    if(MODERNGEKKO_DOLVM_PROFILE)
+        target_compile_definitions(moderngekko_dolvm PRIVATE DOLVM_PROFILE=1)
+    endif()
+    if(NOT WIN32)
+        target_link_libraries(moderngekko_dolvm PRIVATE m)
+    endif()
+endif()
+
 add_library(moderngekko STATIC
     src/runtime/module.cpp
     src/runtime/module_loader.cpp
@@ -270,7 +315,8 @@ if(MODERNGEKKO_ENABLE_DOLPHIN_RUNTIME)
     else()
         target_compile_definitions(moderngekko PRIVATE _M_GENERIC=1)
     endif()
-    target_link_libraries(moderngekko PRIVATE core uicommon)
+    target_sources(moderngekko PRIVATE src/runtime/dolvm/dolvm_module.cpp)
+    target_link_libraries(moderngekko PRIVATE core uicommon moderngekko_dolvm)
     if(TARGET PkgConfig::X11)
         target_sources(moderngekko PRIVATE
             vendor/dolphin/Source/Core/DolphinNoGUI/PlatformX11.cpp)
