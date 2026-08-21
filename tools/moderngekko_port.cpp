@@ -48,6 +48,22 @@ struct BuildOptions
   std::vector<std::string> runner_arguments;
 };
 
+// A module is a build artifact, and a big one -- tens of megabytes per game.
+// Left to itself macOS indexes every one as it lands, which costs more CPU than
+// the recompile did and lands squarely on the machine about to run the game.
+void ExcludeFromIndexing(const fs::path& directory)
+{
+#if defined(__APPLE__)
+  std::error_code ignored;
+  fs::create_directories(directory, ignored);
+  const fs::path marker = directory / ".metadata_never_index";
+  if (!fs::exists(marker, ignored))
+    std::ofstream{marker};
+#else
+  (void)directory;
+#endif
+}
+
 fs::path DefaultOutput()
 {
   if (const char* xdg = std::getenv("XDG_CACHE_HOME"))
@@ -471,6 +487,7 @@ std::optional<fs::path> Build(const char* argv0, const fs::path& root,
   const auto& game = *inspected.metadata;
   if (options.output.empty())
     options.output = DefaultOutput();
+  ExcludeFromIndexing(options.output);
   const fs::path source_root = fs::path(MODERNGEKKO_SOURCE_DIR);
   const DolPatchSet patches = LoadDefaultDolPatches(
       source_root / "vendor/dolphin/Data/Sys/GameSettings" / (game.disc_id + ".ini"));

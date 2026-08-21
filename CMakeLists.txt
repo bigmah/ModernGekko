@@ -18,6 +18,15 @@ option(MODERNGEKKO_ENABLE_DYNAMIC_MODULES
        "Load game modules through the host dynamic-library API"
        ${MODERNGEKKO_DYNAMIC_MODULES_DEFAULT})
 
+option(MODERNGEKKO_DOLVM_PGO_GENERATE
+    "Instrument the interpreter so a run writes a PGO profile" OFF)
+set(MODERNGEKKO_DOLVM_PGO_PROFILE
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/runtime/dolvm/dolvm.profdata" CACHE FILEPATH
+    "llvm-profdata file to build the interpreter against; empty to disable")
+option(MODERNGEKKO_DOLVM_SAMPLE
+    "Sample the interpreter and attribute host time to opcodes (implies BENCH and PROFILE)" OFF)
+option(MODERNGEKKO_DOLVM_BENCH
+    "Stop once DOLVM_BENCH_CYCLES guest cycles have been interpreted, reporting the wall time" OFF)
 option(MODERNGEKKO_DOLVM_PROFILE
     "Count executed DolVM opcodes and print the histogram when a bytecode module closes" OFF)
 option(MODERNGEKKO_ENABLE_DOLPHIN_RUNTIME
@@ -216,10 +225,56 @@ if(MODERNGEKKO_ENABLE_DOLPHIN_RUNTIME)
     )
     if(NOT MSVC)
         # The guest's arithmetic is the guest's; the host may not reassociate it.
-        target_compile_options(moderngekko_dolvm PRIVATE -ffp-contract=off -fno-fast-math)
+        target_compile_options(moderngekko_dolvm PRIVATE -ffp-contract=off -fno-fast-math -mcpu=native)
     endif()
     if(MODERNGEKKO_DOLVM_PROFILE)
         target_compile_definitions(moderngekko_dolvm PRIVATE DOLVM_PROFILE=1)
+    endif()
+    if(MODERNGEKKO_DOLVM_BENCH)
+        target_compile_definitions(moderngekko_dolvm PRIVATE DOLVM_BENCH=1)
+    endif()
+    # The dispatch loop is one enormous function, and which handler follows
+    # which is the whole question -- exactly what a compiler has to guess at and
+    # a recorded profile does not have to. Worth 6-8% of wall clock, so the
+    # profile ships with the tree: generating one needs a game, and the tree
+    # ships none. Regenerate it after changing the interpreter, or the compiler
+    # quietly falls back to guessing:
+    #
+    #   cmake -DMODERNGEKKO_DOLVM_PGO_GENERATE=ON -DMODERNGEKKO_DOLVM_BENCH=ON .
+    #   cmake --build . --target moderngekko-run
+    #   LLVM_PROFILE_FILE=<game>.profraw DOLVM_BENCH_CYCLES=6000000000 \
+    #       ./moderngekko-run --game <extracted> --module <game>.dvm --headless \
+    #       --graphics Null --audio "No Audio Output"
+    #   xcrun llvm-profdata merge -output=src/runtime/dolvm/dolvm.profdata *.profraw
+    if(MODERNGEKKO_DOLVM_PGO_GENERATE)
+        target_compile_options(moderngekko_dolvm PUBLIC -fprofile-instr-generate)
+        target_link_options(moderngekko_dolvm PUBLIC -fprofile-instr-generate)
+        target_compile_definitions(moderngekko_dolvm PRIVATE DOLVM_PGO_GENERATE=1)
+    elseif(MODERNGEKKO_DOLVM_PGO_PROFILE AND EXISTS "${MODERNGEKKO_DOLVM_PGO_PROFILE}")
+        # A profile is tied to the format its llvm-profdata wrote, so a compiler
+        # that cannot read this one has to build without it rather than fail.
+        include(CheckCSourceCompiles)
+        set(CMAKE_REQUIRED_FLAGS
+            "-fprofile-instr-use=${MODERNGEKKO_DOLVM_PGO_PROFILE}")
+        check_c_source_compiles("int main(void){return 0;}"
+            MODERNGEKKO_DOLVM_PGO_USABLE)
+        unset(CMAKE_REQUIRED_FLAGS)
+        if(MODERNGEKKO_DOLVM_PGO_USABLE)
+            target_compile_options(moderngekko_dolvm PRIVATE
+                "-fprofile-instr-use=${MODERNGEKKO_DOLVM_PGO_PROFILE}"
+                # A profile older than the interpreter costs the speedup, not
+                # correctness, so say so once at configure time rather than
+                # shouting on every translation unit.
+                -Wno-profile-instr-out-of-date -Wno-profile-instr-unprofiled)
+        else()
+            message(STATUS
+                "DolVM: this compiler cannot read the shipped PGO profile; "
+                "building the interpreter without it")
+        endif()
+    endif()
+    if(MODERNGEKKO_DOLVM_SAMPLE)
+        target_compile_definitions(moderngekko_dolvm PRIVATE
+            DOLVM_BENCH=1 DOLVM_PROFILE=1 DOLVM_SAMPLE=1)
     endif()
     if(NOT WIN32)
         target_link_libraries(moderngekko_dolvm PRIVATE m)
