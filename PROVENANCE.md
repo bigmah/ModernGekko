@@ -3,11 +3,30 @@
 ModernGekko is distributed under GPL-3.0-or-later. The complete license text
 is in `LICENSE`.
 
+## This fork
+
+This is `bigmah/ModernGekko`, a fork of
+[`ExpansionPak/ModernGekko`](https://github.com/ExpansionPak/ModernGekko).
+Its `dolbundler` branch is the upstream history plus what
+[DolBundler](https://github.com/bigmah/dolbundler) needs, and DolBundler pins
+it as a submodule. Everything under `vendor/dolphin` comes the same way:
+
+| Tree | Fork | Branch | Forked from |
+|---|---|---|---|
+| ModernGekko (this repo) | `bigmah/ModernGekko` | `dolbundler` | `ExpansionPak/ModernGekko` |
+| `vendor/dolphin` (RecompCore) | `bigmah/RecompCore` | `dolbundler` | `ExpansionPak/RecompCore`, itself a fork of `aharonahdoot/RecompCore` |
+| `vendor/dolphin/DolRecomp` | `bigmah/DolRecomp` | `dolbundler` | `ExpansionPak/DolRecomp` |
+
+Each fork keeps its upstream's full commit history, so a change made here can
+be offered back as an ordinary pull request, and `git log upstream/master..`
+in any of them lists exactly what this line has added.
+
 ## RecompCore and Dolphin
 
 The Dolphin-derived runtime is pinned as the `vendor/dolphin` submodule:
 
-- Repository: `https://github.com/ExpansionPak/RecompCore-ModernGekko.git`
+- Repository: `https://github.com/ExpansionPak/RecompCore.git`
+  (previously named `RecompCore-ModernGekko`; this fork pins `bigmah/RecompCore`)
 - Original upstream: `https://github.com/aharonahdoot/RecompCore.git`
 - Original upstream revision: `53e04dc7940d0f93ff4f56b3f597a2cf7e922374`
 - RecompCore revision: `8b47e90bf62a599995425cdcb9bc172c9d39fd9c`
