@@ -3,6 +3,8 @@
 #include "AudioCommon/AudioCommon.h"
 #include "Common/Config/Config.h"
 #include "Common/HookableEvent.h"
+#include "Common/CommonPaths.h"
+#include "Common/FileUtil.h"
 #include "Common/StringUtil.h"
 #include "Core/Boot/Boot.h"
 #include "Core/Boot/BootManager.h"
@@ -14,11 +16,13 @@
 #include "Core/NetPlay/NetPlayClient.h"
 #include "Core/PowerPC/JitInterface.h"
 #include "Core/PowerPC/PowerPC.h"
+#include "Core/PowerPC/StaticRecomp/StaticRecompCore.h"
 #include "Core/PowerPC/StaticRecomp/StaticRecompModuleSource.h"
 #include "Core/State.h"
 #include "Core/System.h"
 #include "DolphinNoGUI/Platform.h"
 #include "UICommon/UICommon.h"
+#include "VideoCommon/FrameDumper.h"
 #include "VideoCommon/PerformanceMetrics.h"
 #include "VideoCommon/VideoConfig.h"
 #include "dolphin_runtime_internal.hpp"
@@ -353,8 +357,15 @@ RuntimeCreateResult Runtime::Create(RuntimeConfig config) {
         preferred != preferred_backends.end() ? *preferred : BACKEND_NULLSOUND;
   }
   Config::SetBase(Config::MAIN_AUDIO_BACKEND, impl->config.audio.backend);
-  Config::SetBase(Config::MAIN_INPUT_BACKGROUND_INPUT,
-                  impl->config.input.background_input);
+  // MODERNGEKKO_BACKGROUND_INPUT=1: take pad input even when the render
+  // window is not frontmost. Nothing in the frontend sets the config field,
+  // so without this a scripted run through a game's menus has to steal the
+  // Mac's focus before every press -- and quietly does nothing if it does
+  // not, because the input gate closes without a word.
+  bool background_input = impl->config.input.background_input;
+  if (const char* background = std::getenv("MODERNGEKKO_BACKGROUND_INPUT"))
+    background_input = background[0] == '1';
+  Config::SetBase(Config::MAIN_INPUT_BACKGROUND_INPUT, background_input);
 
   auto &jit = Core::System::GetInstance().GetJitInterface();
   StaticRecompModuleSource recomp_source;
@@ -513,6 +524,107 @@ RuntimeRunResult Runtime::Run() {
       }
     }
   }
+  // MODERNGEKKO_SAVE_STATE_REQUEST=<dir>: the same request protocol as the
+  // screenshots below, for savestates. `EVERY` above is how an unattended
+  // walk leaves scenes behind it; this is how a scripted one says "here, this
+  // exact moment" -- which is what picking a bench scene by hand needs.
+  std::jthread state_request_thread;
+  if (const char* request = std::getenv("MODERNGEKKO_SAVE_STATE_REQUEST")) {
+    const std::string dir(request);
+    if (!dir.empty()) {
+      File::CreateFullPath(dir + DIR_SEP);
+      state_request_thread = std::jthread([dir](std::stop_token stop) {
+        while (!stop.stop_requested()) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(100));
+          if (stop.stop_requested())
+            return;
+          const File::FSTEntry tree = File::ScanDirectoryTree(dir, false);
+          for (const File::FSTEntry& child : tree.children) {
+            // A request is a bare name -- anything with a dot in it is one of
+            // ours. State::SaveAs writes `<path>.sav<pid>.tmp` on the way,
+            // and taking that for a request saves in a loop until the disc
+            // fills.
+            if (child.isDirectory ||
+                child.virtualName.find('.') != std::string::npos)
+              continue;
+            const std::string path =
+                fmt::format("{}/{}.sav", dir, child.virtualName);
+            State::SaveAs(Core::System::GetInstance(), path);
+            File::Delete(child.physicalName);
+            std::fprintf(stderr, "[state] savestate written to %s\n",
+                         path.c_str());
+          }
+        }
+      });
+    }
+  }
+  // MODERNGEKKO_SCREENSHOT_EVERY=<seconds>:<dir> and
+  // MODERNGEKKO_SCREENSHOT_REQUEST=<dir>: a PNG of what the game is drawing,
+  // written by the emulator itself. A `screencapture` of the window is the
+  // obvious alternative and is worse in every way that matters here -- it
+  // needs the window in front, so it steals focus from whoever is using the
+  // Mac, and it photographs the dock and whatever else is on top. This is the
+  // frame. `EVERY` numbers them from a run; `REQUEST` turns any file dropped
+  // into <dir> into <dir>/<that name>.png, which is how a scripted walk
+  // through a game's menus says "show me where we are now".
+  // No CPUThreadGuard here, although Core::SaveScreenShot takes one: the
+  // frame dumper only takes a mutex and sets a flag, and pausing the CPU
+  // thread from a third thread to do that cost this game twenty-five seconds
+  // of 0.6 fps for one screenshot. Measured, not guessed.
+  const auto screenshot_to = [](std::string path) {
+    g_frame_dumper->SaveScreenshot(std::move(path));
+  };
+  std::jthread screenshot_thread;
+  const char* shot_every = std::getenv("MODERNGEKKO_SCREENSHOT_EVERY");
+  const char* shot_request = std::getenv("MODERNGEKKO_SCREENSHOT_REQUEST");
+  if (shot_every || shot_request) {
+    double period = 0.0;
+    std::string every_dir;
+    if (shot_every) {
+      const std::string spec(shot_every);
+      const size_t colon = spec.find(':');
+      if (colon != std::string::npos) {
+        period = std::atof(spec.substr(0, colon).c_str());
+        every_dir = spec.substr(colon + 1);
+      }
+    }
+    const std::string request_dir = shot_request ? shot_request : "";
+    if (!every_dir.empty())
+      File::CreateFullPath(every_dir + DIR_SEP);
+    if (!request_dir.empty())
+      File::CreateFullPath(request_dir + DIR_SEP);
+    if (period <= 0.0)
+      every_dir.clear();
+    screenshot_thread = std::jthread([period, every_dir, request_dir,
+                                      elapsed_seconds,
+                                      screenshot_to](std::stop_token stop) {
+      double next = period;
+      int index = 0;
+      while (!stop.stop_requested()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        if (stop.stop_requested())
+          return;
+        if (!every_dir.empty() && elapsed_seconds() >= next) {
+          next += period;
+          screenshot_to(fmt::format("{}/shot-{:04d}.png", every_dir, ++index));
+        }
+        if (request_dir.empty())
+          continue;
+        // Anything that appears in the request directory is a name, not a
+        // file: the shot lands beside it and the request is removed, so the
+        // caller can wait for <name>.png and know the frame is on disc.
+        const File::FSTEntry tree = File::ScanDirectoryTree(request_dir, false);
+        for (const File::FSTEntry& child : tree.children) {
+          if (child.isDirectory ||
+              child.virtualName.find('.') != std::string::npos)
+            continue;
+          screenshot_to(
+              fmt::format("{}/{}.png", request_dir, child.virtualName));
+          File::Delete(child.physicalName);
+        }
+      }
+    });
+  }
   // MODERNGEKKO_PERF_LOG=1: fps and emulation speed every two seconds, the
   // same two numbers the iPhone app logs under DOLBUNDLER_PERF_LOG. Read
   // speed, not fps -- a game's own frame rate varies by scene -- and with the
@@ -522,17 +634,41 @@ RuntimeRunResult Runtime::Run() {
   // states written above.
   std::jthread perf_log_thread;
   if (const char* perf = std::getenv("MODERNGEKKO_PERF_LOG");
-      perf && perf[0] == '1') {
-    perf_log_thread = std::jthread([elapsed_seconds](std::stop_token stop) {
+      perf && (perf[0] == '1' || perf[0] == '2')) {
+    const bool with_counters = perf[0] == '2';
+    perf_log_thread = std::jthread([elapsed_seconds, with_counters](std::stop_token stop) {
       while (!stop.stop_requested()) {
         for (int i = 0; i < 20 && !stop.stop_requested(); ++i)
           std::this_thread::sleep_for(std::chrono::milliseconds(100));
         if (stop.stop_requested())
           return;
+  
         const auto& metrics = Core::System::GetInstance().GetPerfMetrics();
-        std::fprintf(stderr, "[perf] t=%.1f fps=%.1f speed=%.0f%%\n",
+        std::string counters;
+        // MODERNGEKKO_PERF_LOG=2 adds the chassis's own counters as deltas over
+        // the sample window: dispatches per thousand charged cycles is what tells
+        // a scene the module runs in place from one it keeps handing back.
+        if (with_counters && g_static_recomp_core)
+        {
+          static StaticRecompCore::LiveCounters last{};
+          const StaticRecompCore::LiveCounters now = g_static_recomp_core->Counters();
+          const u64 cycles = now.charged_cycles - last.charged_cycles;
+          const u64 dispatches = now.dispatches - last.dispatches;
+          counters = fmt::format(
+              " disp={} bursts={} cyc={} disp/kcyc={:.1f} fb={} exc={} yields={}"
+      " idle={}",
+              dispatches, now.bursts - last.bursts, cycles,
+              cycles ? 1000.0 * double(dispatches) / double(cycles) : 0.0,
+              now.fallback_steps - last.fallback_steps,
+              now.native_exceptions - last.native_exceptions,
+              now.poll_yields - last.poll_yields,
+      now.idle_skips - last.idle_skips);
+          last = now;
+        }
+        std::fprintf(stderr, "[perf] t=%.1f fps=%.1f speed=%.0f%%%s\n",
                      elapsed_seconds(), metrics.GetFPS(),
-                     metrics.GetSpeed() * 100.0);
+                     metrics.GetSpeed() * 100.0, counters.c_str());
+
       }
     });
   }
