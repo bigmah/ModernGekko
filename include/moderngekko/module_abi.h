@@ -9,7 +9,7 @@
 extern "C" {
 #endif
 
-#define MODERNGEKKO_MODULE_ABI_VERSION 5u
+#define MODERNGEKKO_MODULE_ABI_VERSION 6u
 #define MODERNGEKKO_GET_MODULE_SYMBOL "staticrecomp_get_module"
 
 #if defined(_WIN32)
@@ -32,6 +32,10 @@ typedef struct ModernGekkoRelSection
     uint32_t section_index;
     uint32_t linked_start;
     uint32_t size;
+    /* Where the game loads this section. Carried by the module rather than read
+     * out of a REL header in guest RAM: Mario Party 7 discards its headers once
+     * OSLink is done, so there is nothing left in memory to read. (ABI v6) */
+    uint32_t runtime_start;
 } ModernGekkoRelSection;
 
 typedef struct ModernGekkoRelModule
@@ -43,6 +47,12 @@ typedef struct ModernGekkoRelModule
     uint32_t file_size;
     const ModernGekkoRelSection* sections;
     uint32_t num_sections;
+    /* Which module is resident, decided by content: every REL in a game like
+     * this shares a module id and a load slot, and only one is linked at a
+     * time. Hashing this window of guest RAM says which one it is. (ABI v6) */
+    uint32_t probe_runtime_start;
+    uint32_t probe_length;
+    uint64_t probe_hash;
 } ModernGekkoRelModule;
 
 struct StaticRecompDispatchGate;
