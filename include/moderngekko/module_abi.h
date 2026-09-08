@@ -9,7 +9,7 @@
 extern "C" {
 #endif
 
-#define MODERNGEKKO_MODULE_ABI_VERSION 4u
+#define MODERNGEKKO_MODULE_ABI_VERSION 5u
 #define MODERNGEKKO_GET_MODULE_SYMBOL "staticrecomp_get_module"
 
 #if defined(_WIN32)
@@ -79,6 +79,14 @@ typedef struct ModernGekkoModuleDesc
     uint32_t num_rel_modules;
     const ModernGekkoNativeMetadata* native_metadata;
     void (*publish_gate)(const struct StaticRecompDispatchGate* gate);
+
+    // Busy-wait loop heads the recompiler found (ABI v5). Generated code does
+    // not spin in these: it runs one pass and returns with pc at the head, so
+    // a dispatch that lands here is a guest waiting for an interrupt, and the
+    // chassis answers it by advancing emulated time to the next scheduled
+    // event. Sorted ascending; may be NULL.
+    const uint32_t* idle_loops;
+    uint32_t num_idle_loops;
 } ModernGekkoModuleDesc;
 
 typedef const ModernGekkoModuleDesc* (*ModernGekkoGetModuleFn)(void);
