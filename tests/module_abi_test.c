@@ -58,8 +58,8 @@ int main(void)
         NULL, 0u, &live_budget, NULL, 0u, 0u,
     };
 
-    COMPILE_ASSERT(module_abi_version_is_four,
-                   MODERNGEKKO_MODULE_ABI_VERSION == 4u);
+    COMPILE_ASSERT(module_abi_version_is_six,
+                   MODERNGEKKO_MODULE_ABI_VERSION == 6u);
     COMPILE_ASSERT(game_id_storage_is_eight_bytes,
                    sizeof(descriptor.game_id) == 8u);
     COMPILE_ASSERT(dispatch_follows_entry_point,
