@@ -319,6 +319,89 @@ int main() {
 
   mismatch.reset();
   server.reset();
+
+  // Nearby iPhone sessions assign GameCube ports, independent of the desktop
+  // Wii lobby. Exercise four phones, ready gating, routing, capacity and reuse.
+  NetPlay::SetCompatibilityFingerprint("gamecube-build");
+  server = std::make_unique<NetPlay::NetPlayServer>(
+      0, false, &host_ui, NetPlay::NetTraversalConfig{},
+      NetPlay::ControllerMode::GameCube, true);
+  if (!server->is_connected) return 30;
+  std::array<TestUI, 4> gc_ui;
+  std::array<std::unique_ptr<NetPlay::NetPlayClient>, 4> gc;
+  for (std::size_t i = 0; i < gc.size(); ++i) {
+    gc[i] = std::make_unique<NetPlay::NetPlayClient>(
+        "127.0.0.1", server->GetPort(), &gc_ui[i], "Phone " + std::to_string(i + 1),
+        NetPlay::NetTraversalConfig{}, 1, NetPlay::ControllerMode::GameCube);
+    if (!gc[i]->IsConnected()) return 31;
+  }
+  if (!WaitFor([&] {
+        const auto mapping = gc[0]->GetPadMappingSnapshot();
+        return mapping == NetPlay::PadMappingArray{1, 2, 3, 4} &&
+               gc[3]->GetPadMappingSnapshot() == mapping &&
+               gc[0]->GetWiimoteMappingSnapshot() == NetPlay::PadMappingArray{};
+      })) return 32;
+  if (server->CanStart()) return 33;
+  // A client cannot mark itself ready while game compatibility is unknown.
+  gc[0]->SetReady(true);
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  if (server->CanStart()) return 34;
+  for (auto& phone : gc) {
+    sf::Packet status;
+    status << NetPlay::MessageID::GameStatus << NetPlay::SyncIdentifierComparison::SameGame;
+    phone->SendAsync(std::move(status));
+    phone->SetReady(true);
+  }
+  if (!WaitFor([&] { return server->CanStart(); })) return 35;
+  gc[2]->SetReady(false);
+  if (!WaitFor([&] { return !server->CanStart(); })) return 36;
+
+  TestUI full_ui;
+  auto full = std::make_unique<NetPlay::NetPlayClient>(
+      "127.0.0.1", server->GetPort(), &full_ui, "Fifth phone", NetPlay::NetTraversalConfig{},
+      1, NetPlay::ControllerMode::GameCube);
+  if (full->IsConnected() || full->GetConnectionError() != NetPlay::ConnectionError::RoomFull)
+    return 37;
+  full.reset();
+  TestUI wrong_mode_ui;
+  auto wrong_mode = std::make_unique<NetPlay::NetPlayClient>(
+      "127.0.0.1", server->GetPort(), &wrong_mode_ui, "Wii", NetPlay::NetTraversalConfig{});
+  if (wrong_mode->IsConnected() ||
+      wrong_mode->GetConnectionError() != NetPlay::ConnectionError::CompatibilityMismatch)
+    return 38;
+  wrong_mode.reset();
+
+  // Send a complete GameCube input from player 1; the other phones must see
+  // identical buttons, axes and triggers at the same emulated controller port.
+  sf::Packet pad;
+  pad << NetPlay::MessageID::PadData << static_cast<NetPlay::PadIndex>(0)
+      << static_cast<u16>(0x0100) << static_cast<u8>(255) << static_cast<u8>(0)
+      << static_cast<u8>(180) << static_cast<u8>(90) << static_cast<u8>(128)
+      << static_cast<u8>(129) << static_cast<u8>(80) << static_cast<u8>(20) << true;
+  gc[0]->SendAsync(std::move(pad), NetPlay::INPUT_CHANNEL);
+  for (int i = 1; i < 4; ++i) {
+    GCPadStatus received{};
+    if (!WaitFor([&] { return gc[i]->GetNetPads(0, false, &received); }) ||
+        received.button != 0x0100 || received.analogA != 255 || received.stickX != 180 ||
+        received.stickY != 90 || received.substickY != 129 || received.triggerLeft != 80 ||
+        received.triggerRight != 20 || !received.isConnected) return 39;
+  }
+  gc[2].reset();
+  if (!WaitFor([&] { return gc[0]->GetPadMappingSnapshot()[2] == 0; })) return 40;
+  gc[2] = std::make_unique<NetPlay::NetPlayClient>(
+      "127.0.0.1", server->GetPort(), &gc_ui[2], "Replacement phone", NetPlay::NetTraversalConfig{},
+      1, NetPlay::ControllerMode::GameCube);
+  if (!gc[2]->IsConnected() || !WaitFor([&] {
+        return gc[0]->GetPadMappingSnapshot() == NetPlay::PadMappingArray{1, 2, 3, 4};
+      })) return 41;
+  if (server->CanStart()) return 42; // A replacement must explicitly ready up.
+  // A phone cannot submit another player's inputs.
+  sf::Packet forged;
+  forged << NetPlay::MessageID::PadData << static_cast<NetPlay::PadIndex>(0);
+  gc[2]->SendAsync(std::move(forged), NetPlay::INPUT_CHANNEL);
+  if (!WaitFor([&] { return gc[0]->GetPadMappingSnapshot()[2] == 0; })) return 43;
+  for (auto& phone : gc) phone.reset();
+  server.reset();
   UICommon::Shutdown();
   std::filesystem::remove_all(directory);
   return 0;
