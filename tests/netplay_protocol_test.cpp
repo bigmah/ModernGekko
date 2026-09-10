@@ -341,6 +341,29 @@ int main() {
                gc[3]->GetPadMappingSnapshot() == mapping &&
                gc[0]->GetWiimoteMappingSnapshot() == NetPlay::PadMappingArray{};
       })) return 32;
+
+  // Low ping must not prevent a GameCube room from retaining enough input
+  // headroom for repeated stalls. All four clients receive the same target.
+  server->AdjustPadBufferSize(2);
+  server->SetAdaptiveBuffer(true);
+  const auto all_buffers = [&](u32 size) {
+    return std::ranges::all_of(gc_ui, [size](const TestUI& ui) {
+      return ui.buffer == size;
+    });
+  };
+  if (!WaitFor([&] { return all_buffers(6); })) return 44;
+  sf::Packet gc_buffer_request;
+  gc_buffer_request << NetPlay::MessageID::PadBufferRequest << u32{10};
+  gc[0]->SendAsync(std::move(gc_buffer_request));
+  if (!WaitFor([&] { return all_buffers(10); })) return 45;
+  // The old policy discarded a stall boost after four seconds.
+  std::this_thread::sleep_for(std::chrono::milliseconds(4500));
+  if (!all_buffers(10)) return 46;
+  sf::Packet excessive_buffer_request;
+  excessive_buffer_request << NetPlay::MessageID::PadBufferRequest << u32{20};
+  gc[3]->SendAsync(std::move(excessive_buffer_request));
+  if (!WaitFor([&] { return all_buffers(12); })) return 47;
+
   if (server->CanStart()) return 33;
   // A client cannot mark itself ready while game compatibility is unknown.
   gc[0]->SetReady(true);

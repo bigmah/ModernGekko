@@ -761,6 +761,12 @@ if(BUILD_TESTING)
     add_test(NAME moderngekko.frontend_config_gamecube
              COMMAND moderngekko_frontend_config_gamecube_test)
 
+    add_executable(moderngekko_netplay_buffer_test tests/netplay_buffer_test.cpp)
+    target_include_directories(moderngekko_netplay_buffer_test PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/vendor/dolphin/Source/Core")
+    target_compile_features(moderngekko_netplay_buffer_test PRIVATE cxx_std_20)
+    add_test(NAME moderngekko.netplay_buffer COMMAND moderngekko_netplay_buffer_test)
+
     if(MODERNGEKKO_ENABLE_DOLPHIN_RUNTIME)
         add_executable(moderngekko_netplay_protocol_test
             tests/netplay_protocol_test.cpp
