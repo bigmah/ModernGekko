@@ -9,6 +9,11 @@
 
 #include <SDL3/SDL.h>
 
+#ifdef __APPLE__
+#include <CoreFoundation/CoreFoundation.h>
+#endif
+
+#include <algorithm>
 #include <charconv>
 #include <chrono>
 #include <csignal>
@@ -17,6 +22,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -116,20 +122,40 @@ std::string LibrarySuffix() {
 #endif
 }
 
-// Print the gamepads Dolphin's SDL input backend will see, one per line, as
+// The gamepads Dolphin's SDL input backend will see, as
 //
-//   SDL/<index>/<name>\t<label>
+//   SDL/<index>/<name>  and  <label>
 //
-// The first field is exactly what a GCPadNew.ini or WiimoteNew.ini `Device`
-// line has to hold, so a frontend can offer a controller picker without
-// linking SDL itself. The index counts every joystick sharing a name, gamepad
-// or not, because Dolphin registers those too; the launcher's picker numbers
-// them the same way.
-int ListControllers() {
+// The device is exactly what a GCPadNew.ini or WiimoteNew.ini `Device` line
+// has to hold. The index counts every joystick sharing a name, gamepad or not,
+// because Dolphin registers those too; the launcher's picker numbers them the
+// same way.
+struct Gamepad {
+  std::string device;
+  std::string label;
+};
+
+std::optional<std::vector<Gamepad>> ConnectedGamepads() {
   if (!SDL_Init(SDL_INIT_GAMEPAD)) {
     std::cerr << "SDL_Init failed: " << SDL_GetError() << '\n';
-    return 1;
+    return std::nullopt;
   }
+  // On macOS, SDL takes gamepads from the GameController framework, which only
+  // announces them while the main run loop turns; a process that never runs it
+  // sees none. Wait up to a second, and a moment more once one shows up for
+  // any that follow it.
+  auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+  while (std::chrono::steady_clock::now() < deadline) {
+#ifdef __APPLE__
+    CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.02, false);
+#endif
+    SDL_PumpEvents();
+    if (!SDL_HasJoystick())
+      continue;
+    deadline = std::min(deadline, std::chrono::steady_clock::now() +
+                                      std::chrono::milliseconds(150));
+  }
+  std::vector<Gamepad> gamepads;
   int count = 0;
   SDL_JoystickID *joystick_ids = SDL_GetJoysticks(&count);
   std::unordered_map<std::string, int> device_ids;
@@ -143,14 +169,24 @@ int ListControllers() {
     const int device_id = device_ids[name]++;
     if (!gamepad)
       continue;
-    std::cout << "SDL/" << device_id << '/' << name << '\t'
-              << (device_id == 0 ? name
-                                 : name + " (" + std::to_string(device_id + 1) +
-                                       ")")
-              << '\n';
+    gamepads.push_back(
+        {"SDL/" + std::to_string(device_id) + '/' + name,
+         device_id == 0 ? name
+                        : name + " (" + std::to_string(device_id + 1) + ")"});
   }
   SDL_free(joystick_ids);
   SDL_Quit();
+  return gamepads;
+}
+
+// Print ConnectedGamepads() one per line as "<device>\t<label>", so a
+// frontend can offer a controller picker without linking SDL itself.
+int ListControllers() {
+  const std::optional<std::vector<Gamepad>> gamepads = ConnectedGamepads();
+  if (!gamepads)
+    return 1;
+  for (const Gamepad &gamepad : *gamepads)
+    std::cout << gamepad.device << '\t' << gamepad.label << '\n';
   return 0;
 }
 
@@ -336,6 +372,34 @@ int RunMain(int argc, char **argv) {
   if (!inspected) {
     std::cerr << "invalid game: " << inspected.error << '\n';
     return 2;
+  }
+
+  // Nothing chosen in config.ini and no ports bound in this game's pad
+  // profile, as when a launcher other than DolBundler's window starts it: bind
+  // the gamepads connected now, in SDL's order, rather than leave every port
+  // on Dolphin's keyboard defaults.
+  const bool gamecube =
+      inspected.metadata->platform == moderngekko::GamePlatform::GameCube;
+  if (!netplay_role && frontend_config.controllers.empty() &&
+      moderngekko::frontend::ReadConfiguredControllers(config.user_directory,
+                                                       gamecube)
+          .empty()) {
+    if (const std::optional<std::vector<Gamepad>> gamepads =
+            ConnectedGamepads();
+        gamepads && !gamepads->empty()) {
+      std::vector<std::string> devices;
+      for (const Gamepad &gamepad : *gamepads)
+        if (devices.size() < 4)
+          devices.push_back(gamepad.device);
+      std::string controller_message;
+      if (moderngekko::frontend::GenerateControllerConfig(
+              config.user_directory, devices, gamecube, &controller_message))
+        std::cout << "controller configuration: " << controller_message
+                  << " (connected gamepads)\n";
+      else
+        std::cerr << "controller configuration: " << controller_message
+                  << '\n';
+    }
   }
 
 #ifdef MODERNGEKKO_REQUIRED_DISC_ID

@@ -48,10 +48,18 @@ std::string
 ReadConfiguredController(const std::filesystem::path &user_directory);
 std::vector<std::string>
 ReadConfiguredControllers(const std::filesystem::path &user_directory);
+// The overloads taking `gamecube` choose GCPadNew.ini or WiimoteNew.ini for
+// one game; the others use the profile this build was configured for.
+std::vector<std::string>
+ReadConfiguredControllers(const std::filesystem::path &user_directory,
+                          bool gamecube);
 bool ControllerConfigExists(const std::filesystem::path &user_directory);
 bool GenerateControllerConfig(const std::filesystem::path &user_directory,
                               std::span<const std::string> controllers,
                               std::string *message);
+bool GenerateControllerConfig(const std::filesystem::path &user_directory,
+                              std::span<const std::string> controllers,
+                              bool gamecube, std::string *message);
 bool GenerateControllerConfig(const std::filesystem::path &user_directory,
                               std::string_view controller,
                               std::string *message);

@@ -55,21 +55,95 @@ bool ParseBoolean(const std::string &value, bool *result) {
   return false;
 }
 
-fs::path ControllerConfigPath(const fs::path &user_directory) {
 #ifdef MODERNGEKKO_GAMECUBE_CONTROLLERS
-  return user_directory / "Config" / "GCPadNew.ini";
+constexpr bool DEFAULT_GAMECUBE = true;
 #else
-  return user_directory / "Config" / "WiimoteNew.ini";
+constexpr bool DEFAULT_GAMECUBE = false;
 #endif
+
+fs::path ControllerConfigPath(const fs::path &user_directory, bool gamecube) {
+  return user_directory / "Config" /
+         (gamecube ? "GCPadNew.ini" : "WiimoteNew.ini");
 }
 
-std::string_view ControllerSectionPrefix() {
-#ifdef MODERNGEKKO_GAMECUBE_CONTROLLERS
-  return "[GCPad";
-#else
-  return "[Wiimote";
-#endif
+std::string_view ControllerSectionPrefix(bool gamecube) {
+  return gamecube ? "[GCPad" : "[Wiimote";
 }
+
+// Dolphin's SDL input names, laid out like the controller each game expects.
+constexpr std::string_view GCPAD_MAPPING =
+    "Buttons/A = `Button A`\n"
+    "Buttons/B = `Button B`\n"
+    "Buttons/X = `Button X`\n"
+    "Buttons/Y = `Button Y`\n"
+    "Buttons/Z = `Shoulder R`\n"
+    "Buttons/Start = Start\n"
+    "Main Stick/Up = `Left Y+`\n"
+    "Main Stick/Down = `Left Y-`\n"
+    "Main Stick/Left = `Left X-`\n"
+    "Main Stick/Right = `Left X+`\n"
+    "Main Stick/Calibration = 100.00\n"
+    "C-Stick/Up = `Right Y+`\n"
+    "C-Stick/Down = `Right Y-`\n"
+    "C-Stick/Left = `Right X-`\n"
+    "C-Stick/Right = `Right X+`\n"
+    "C-Stick/Calibration = 100.00\n"
+    "Triggers/L = `Trigger L`\n"
+    "Triggers/R = `Trigger R`\n"
+    "Triggers/L-Analog = `Trigger L`\n"
+    "Triggers/R-Analog = `Trigger R`\n"
+    "D-Pad/Up = `Pad N`\n"
+    "D-Pad/Down = `Pad S`\n"
+    "D-Pad/Left = `Pad W`\n"
+    "D-Pad/Right = `Pad E`\n"
+    "Rumble/Motor = `Motor L` | `Motor R`\n";
+
+constexpr std::string_view WIIMOTE_MAPPING =
+    "Buttons/A = `Shoulder L`\n"
+    "Buttons/B = `Shoulder R`\n"
+    "Buttons/1 = `Button W`\n"
+    "Buttons/2 = `Button S`\n"
+    "Buttons/- = Back\n"
+    "Buttons/+ = Start\n"
+    "Buttons/Home = Guide\n"
+    "D-Pad/Up = `Pad N` | `Left Y+`\n"
+    "D-Pad/Down = `Pad S` | `Left Y-`\n"
+    "D-Pad/Left = `Pad W` | `Left X-`\n"
+    "D-Pad/Right = `Pad E` | `Left X+`\n"
+    "IR/Up = `Cursor Y-`\n"
+    "IR/Down = `Cursor Y+`\n"
+    "IR/Left = `Cursor X-`\n"
+    "IR/Right = `Cursor X+`\n"
+    "Shake/X = `Trigger L`\n"
+    "Shake/Y = `Trigger R`\n"
+    "Shake/Z = `Trigger L`\n"
+    "IRPassthrough/Object 1 X = `IR Object 1 X`\n"
+    "IRPassthrough/Object 1 Y = `IR Object 1 Y`\n"
+    "IRPassthrough/Object 1 Size = `IR Object 1 Size`\n"
+    "IRPassthrough/Object 2 X = `IR Object 2 X`\n"
+    "IRPassthrough/Object 2 Y = `IR Object 2 Y`\n"
+    "IRPassthrough/Object 2 Size = `IR Object 2 Size`\n"
+    "IRPassthrough/Object 3 X = `IR Object 3 X`\n"
+    "IRPassthrough/Object 3 Y = `IR Object 3 Y`\n"
+    "IRPassthrough/Object 3 Size = `IR Object 3 Size`\n"
+    "IRPassthrough/Object 4 X = `IR Object 4 X`\n"
+    "IRPassthrough/Object 4 Y = `IR Object 4 Y`\n"
+    "IRPassthrough/Object 4 Size = `IR Object 4 Size`\n"
+    "IMUAccelerometer/Up = `Accel Up`\n"
+    "IMUAccelerometer/Down = `Accel Down`\n"
+    "IMUAccelerometer/Left = `Accel Left`\n"
+    "IMUAccelerometer/Right = `Accel Right`\n"
+    "IMUAccelerometer/Forward = `Accel Forward`\n"
+    "IMUAccelerometer/Backward = `Accel Backward`\n"
+    "IMUGyroscope/Pitch Up = `Gyro Pitch Up`\n"
+    "IMUGyroscope/Pitch Down = `Gyro Pitch Down`\n"
+    "IMUGyroscope/Roll Left = `Gyro Roll Left`\n"
+    "IMUGyroscope/Roll Right = `Gyro Roll Right`\n"
+    "IMUGyroscope/Yaw Left = `Gyro Yaw Left`\n"
+    "IMUGyroscope/Yaw Right = `Gyro Yaw Right`\n"
+    "Rumble/Motor = Motor\n"
+    "Extension = None\n"
+    "Options/Sideways Wiimote = True\n";
 
 } // namespace
 
@@ -297,11 +371,16 @@ std::string ReadConfiguredController(const fs::path &user_directory) {
 
 std::vector<std::string>
 ReadConfiguredControllers(const fs::path &user_directory) {
-  std::ifstream input(ControllerConfigPath(user_directory));
+  return ReadConfiguredControllers(user_directory, DEFAULT_GAMECUBE);
+}
+
+std::vector<std::string>
+ReadConfiguredControllers(const fs::path &user_directory, bool gamecube) {
+  std::ifstream input(ControllerConfigPath(user_directory, gamecube));
   std::vector<std::string> controllers;
   std::string line;
   std::size_t controller_index = 4;
-  const std::string_view section_prefix = ControllerSectionPrefix();
+  const std::string_view section_prefix = ControllerSectionPrefix(gamecube);
   while (std::getline(input, line)) {
     const std::string trimmed = Trim(line);
     if (trimmed.starts_with('[') && trimmed.ends_with(']')) {
@@ -331,14 +410,22 @@ ReadConfiguredControllers(const fs::path &user_directory) {
   return controllers;
 }
 
+// A profile binds something only once a port names a device; Dolphin itself
+// leaves an empty GCPadNew.ini behind.
 bool ControllerConfigExists(const fs::path &user_directory) {
-  std::error_code ec;
-  return fs::is_regular_file(ControllerConfigPath(user_directory), ec);
+  return !ReadConfiguredControllers(user_directory, DEFAULT_GAMECUBE).empty();
 }
 
 bool GenerateControllerConfig(const fs::path &user_directory,
                               std::span<const std::string> controllers,
                               std::string *message) {
+  return GenerateControllerConfig(user_directory, controllers, DEFAULT_GAMECUBE,
+                                  message);
+}
+
+bool GenerateControllerConfig(const fs::path &user_directory,
+                              std::span<const std::string> controllers,
+                              bool gamecube, std::string *message) {
   if (controllers.empty() || controllers.size() > 4) {
     if (message)
       *message = "select between one and four connected SDL gamepads";
@@ -353,7 +440,7 @@ bool GenerateControllerConfig(const fs::path &user_directory,
     }
   }
 
-  const fs::path destination = ControllerConfigPath(user_directory);
+  const fs::path destination = ControllerConfigPath(user_directory, gamecube);
   std::error_code ec;
   fs::create_directories(destination.parent_path(), ec);
   if (ec) {
@@ -368,91 +455,14 @@ bool GenerateControllerConfig(const fs::path &user_directory,
     return false;
   }
   for (std::size_t i = 0; i < 4; ++i) {
-#ifdef MODERNGEKKO_GAMECUBE_CONTROLLERS
-    output << "[GCPad" << i + 1 << "]\n";
+    output << (gamecube ? "[GCPad" : "[Wiimote") << i + 1 << "]\n";
     if (i >= controllers.size())
       continue;
     output << "Device = " << controllers[i] << '\n'
-           << "Buttons/A = `Button A`\n"
-              "Buttons/B = `Button B`\n"
-              "Buttons/X = `Button X`\n"
-              "Buttons/Y = `Button Y`\n"
-              "Buttons/Z = `Shoulder R`\n"
-              "Buttons/Start = Start\n"
-              "Main Stick/Up = `Left Y+`\n"
-              "Main Stick/Down = `Left Y-`\n"
-              "Main Stick/Left = `Left X-`\n"
-              "Main Stick/Right = `Left X+`\n"
-              "Main Stick/Calibration = 100.00\n"
-              "C-Stick/Up = `Right Y+`\n"
-              "C-Stick/Down = `Right Y-`\n"
-              "C-Stick/Left = `Right X-`\n"
-              "C-Stick/Right = `Right X+`\n"
-              "C-Stick/Calibration = 100.00\n"
-              "Triggers/L = `Trigger L`\n"
-              "Triggers/R = `Trigger R`\n"
-              "Triggers/L-Analog = `Trigger L`\n"
-              "Triggers/R-Analog = `Trigger R`\n"
-              "D-Pad/Up = `Pad N`\n"
-              "D-Pad/Down = `Pad S`\n"
-              "D-Pad/Left = `Pad W`\n"
-              "D-Pad/Right = `Pad E`\n"
-              "Rumble/Motor = `Motor L` | `Motor R`\n";
-#else
-    output << "[Wiimote" << i + 1 << "]\n";
-    if (i >= controllers.size())
-      continue;
-    output << "Device = " << controllers[i] << '\n'
-           << "Buttons/A = `Shoulder L`\n"
-              "Buttons/B = `Shoulder R`\n"
-              "Buttons/1 = `Button W`\n"
-              "Buttons/2 = `Button S`\n"
-              "Buttons/- = Back\n"
-              "Buttons/+ = Start\n"
-              "Buttons/Home = Guide\n"
-              "D-Pad/Up = `Pad N` | `Left Y+`\n"
-              "D-Pad/Down = `Pad S` | `Left Y-`\n"
-              "D-Pad/Left = `Pad W` | `Left X-`\n"
-              "D-Pad/Right = `Pad E` | `Left X+`\n"
-              "IR/Up = `Cursor Y-`\n"
-              "IR/Down = `Cursor Y+`\n"
-              "IR/Left = `Cursor X-`\n"
-              "IR/Right = `Cursor X+`\n"
-              "Shake/X = `Trigger L`\n"
-              "Shake/Y = `Trigger R`\n"
-              "Shake/Z = `Trigger L`\n"
-              "IRPassthrough/Object 1 X = `IR Object 1 X`\n"
-              "IRPassthrough/Object 1 Y = `IR Object 1 Y`\n"
-              "IRPassthrough/Object 1 Size = `IR Object 1 Size`\n"
-              "IRPassthrough/Object 2 X = `IR Object 2 X`\n"
-              "IRPassthrough/Object 2 Y = `IR Object 2 Y`\n"
-              "IRPassthrough/Object 2 Size = `IR Object 2 Size`\n"
-              "IRPassthrough/Object 3 X = `IR Object 3 X`\n"
-              "IRPassthrough/Object 3 Y = `IR Object 3 Y`\n"
-              "IRPassthrough/Object 3 Size = `IR Object 3 Size`\n"
-              "IRPassthrough/Object 4 X = `IR Object 4 X`\n"
-              "IRPassthrough/Object 4 Y = `IR Object 4 Y`\n"
-              "IRPassthrough/Object 4 Size = `IR Object 4 Size`\n"
-              "IMUAccelerometer/Up = `Accel Up`\n"
-              "IMUAccelerometer/Down = `Accel Down`\n"
-              "IMUAccelerometer/Left = `Accel Left`\n"
-              "IMUAccelerometer/Right = `Accel Right`\n"
-              "IMUAccelerometer/Forward = `Accel Forward`\n"
-              "IMUAccelerometer/Backward = `Accel Backward`\n"
-              "IMUGyroscope/Pitch Up = `Gyro Pitch Up`\n"
-              "IMUGyroscope/Pitch Down = `Gyro Pitch Down`\n"
-              "IMUGyroscope/Roll Left = `Gyro Roll Left`\n"
-              "IMUGyroscope/Roll Right = `Gyro Roll Right`\n"
-              "IMUGyroscope/Yaw Left = `Gyro Yaw Left`\n"
-              "IMUGyroscope/Yaw Right = `Gyro Yaw Right`\n"
-              "Rumble/Motor = Motor\n"
-              "Extension = None\n"
-              "Options/Sideways Wiimote = True\n";
-#endif
+           << (gamecube ? GCPAD_MAPPING : WIIMOTE_MAPPING);
   }
-#ifndef MODERNGEKKO_GAMECUBE_CONTROLLERS
-  output << "[BalanceBoard]\n";
-#endif
+  if (!gamecube)
+    output << "[BalanceBoard]\n";
   if (!output) {
     if (message)
       *message = "can't write " + destination.string();
@@ -460,11 +470,7 @@ bool GenerateControllerConfig(const fs::path &user_directory,
   }
   if (message)
     *message = std::to_string(controllers.size()) +
-#ifdef MODERNGEKKO_GAMECUBE_CONTROLLERS
-               " GameCube controller" +
-#else
-               " sideways Wii Remote" +
-#endif
+               (gamecube ? " GameCube controller" : " sideways Wii Remote") +
                (controllers.size() == 1 ? " mapped" : "s mapped");
   return true;
 }
